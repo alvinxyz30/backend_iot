@@ -5,7 +5,7 @@ import mysql.connector
 app = Flask(__name__)
 CORS(app)
 
-# Konfigurasi Database
+# Settingan database MySQL-nya
 db_config = {
     'host': '45.90.230.231',
     'user': 'u1722332_b57760b191fad37b9a3b72213e43773c',
@@ -13,27 +13,24 @@ db_config = {
     'database': 'u1722332_IOT_Project'
 }
 
+# Fungsi buat buka koneksi ke database, biar ga repot ngetik ulang
 def get_db_connection():
-    """ Fungsi helper untuk koneksi ke MySQL """
     try:
         return mysql.connector.connect(**db_config)
     except Exception as e:
-        print(f"Database Connection Error: {e}")
+        print(f"Duh, gagal konek db: {e}")
         return None
 
 # ---------------------------------------------------------
-# ENDPOINTS UNTUK HARDWARE (NodeMCU / ESP8266)
+# API BUAT ALAT (NodeMCU / ESP8266)
 # ---------------------------------------------------------
 
+# Alat bakal nge-cek kesini terus (polling) buat liat ada perintah buka pintu/enroll gak
 @app.route('/api/device/status', methods=['GET'])
 def get_device_status():
-    """ 
-    NodeMCU akan memanggil endpoint ini secara berkala (polling) 
-    untuk mengecek apakah ada perintah dari web (Unlock/Enroll/Delete).
-    """
     conn = get_db_connection()
     if not conn:
-        return jsonify({'status': 'error', 'message': 'DB connection failed'}), 500
+        return jsonify({'status': 'error', 'message': 'Gagal konek database'}), 500
         
     cursor = conn.cursor(dictionary=True)
     cursor.execute('SELECT mode, target_enroll_id, door_status FROM device_state WHERE id = 1')
@@ -42,12 +39,9 @@ def get_device_status():
     conn.close()
     return jsonify(data)
 
+# Kalo alat udah beres ngelakuin sesuatu, dia lapor balik kesini buat update status
 @app.route('/api/device/update', methods=['POST'])
 def update_device_status():
-    """ 
-    Digunakan oleh alat untuk update balik status pintu 
-    atau mereset mode setelah aksi selesai dilakukan.
-    """
     conn = get_db_connection()
     if not conn:
         return jsonify({'status': 'error'}), 500
@@ -65,9 +59,9 @@ def update_device_status():
     
     return jsonify({'status': 'updated'})
 
+# Buat simpan riwayat siapa aja yang akses pintu (Log)
 @app.route('/api/log/add', methods=['POST'])
 def add_log():
-    """ Mencatat riwayat akses (siapa, jam berapa, metodenya apa) ke database """
     conn = get_db_connection()
     if not conn:
         return jsonify({'status': 'error'}), 500
@@ -81,9 +75,9 @@ def add_log():
     conn.close()
     return jsonify({'status': 'log_saved'})
 
+# Cek apakah ID jari yang ditempel itu Admin atau bukan
 @app.route('/api/auth/admin', methods=['POST'])
 def verify_admin():
-    """ Verifikasi apakah fingerprint ID yang ditempel memiliki akses level Admin """
     conn = get_db_connection()
     if not conn:
         return jsonify({'status': 'error'}), 500
@@ -101,12 +95,12 @@ def verify_admin():
 
 
 # ---------------------------------------------------------
-# ENDPOINTS UNTUK FRONTEND WEB (Dashboard)
+# API BUAT DASHBOARD WEB
 # ---------------------------------------------------------
 
+# Ambil 20 data log terbaru buat dipajang di tabel dashboard web
 @app.route('/api/logs', methods=['GET'])
 def get_logs():
-    """ Ambil 20 riwayat akses terakhir untuk ditampilkan di tabel dashboard """
     conn = get_db_connection()
     if not conn:
         return jsonify({'status': 'error'}), 500
@@ -118,24 +112,24 @@ def get_logs():
     conn.close()
     return jsonify(logs)
 
+# Trigger dari web buat buka pintu jarak jauh
 @app.route('/api/web/unlock', methods=['POST'])
 def web_unlock():
-    """ Request buka pintu dari tombol di dashboard web """
     conn = get_db_connection()
     if not conn:
         return jsonify({'status': 'error'}), 500
     
     cursor = conn.cursor()
-    # Mengirim sinyal OPEN_REQUEST yang nantinya akan dibaca oleh alat via polling
+    # Kasih perintah ke database biar nanti dibaca sama alat
     cursor.execute("UPDATE device_state SET door_status = 'OPEN_REQUEST' WHERE id = 1")
     
     conn.commit()
     conn.close()
     return jsonify({'status': 'command_sent'})
 
+# Daftarin user baru: cari slot ID yang kosong di sensor terus suruh alat masuk mode Enroll
 @app.route('/api/web/enroll', methods=['POST'])
 def web_enroll():
-    """ Proses registrasi user baru: cari ID kosong lalu set mode alat ke ENROLL """
     conn = get_db_connection()
     if not conn:
         return jsonify({'status': 'error', 'message': 'Database error'}), 500
@@ -145,20 +139,20 @@ def web_enroll():
     new_role = data.get('role')
     
     if not new_name or not new_role:
-        return jsonify({'status': 'error', 'message': 'Nama dan Role tidak boleh kosong'}), 400
+        return jsonify({'status': 'error', 'message': 'Nama ama Role-nya jangan lupa diisi'}), 400
 
     cursor = conn.cursor(dictionary=True)
     cursor.execute("SELECT fingerprint_id FROM fingerprint_users ORDER BY fingerprint_id ASC")
     used_ids = [u['fingerprint_id'] for u in cursor.fetchall()]
     
-    # Cari slot ID yang kosong antara 1 - 127 (kapasitas sensor)
+    # Cari ID kosong dari 1 sampe 127 buat ditaruh di memori sensor
     assigned_id = next((i for i in range(1, 128) if i not in used_ids), None)
             
     if not assigned_id:
         conn.close()
-        return jsonify({'status': 'error', 'message': 'Kapasitas sensor penuh!'}), 400
+        return jsonify({'status': 'error', 'message': 'Memori sensor udah penuh gan!'}), 400
 
-    # Simpan data user ke DB dan trigger alat untuk mulai scanning sidik jari
+    # Simpan ke db terus set mode alat jadi ENROLL
     cursor.execute(
         "INSERT INTO fingerprint_users (fingerprint_id, name, role) VALUES (%s, %s, %s)", 
         (assigned_id, new_name, new_role)
@@ -172,9 +166,9 @@ def web_enroll():
     conn.close()
     return jsonify({'status': 'enroll_triggered', 'assigned_id': assigned_id})
 
+# Cari nama user berdasarkan ID jarinya (dipanggil alat sebelum buka pintu)
 @app.route('/api/user/name', methods=['POST'])
 def get_user_name():
-    """ Mendapatkan nama user berdasarkan ID sidik jari (biasanya dipanggil alat) """
     conn = get_db_connection()
     if not conn:
         return jsonify({'status': 'error', 'name': 'Unknown'}), 500
@@ -190,23 +184,23 @@ def get_user_name():
     
     return jsonify({'status': 'not_found', 'name': f'ID #{finger_id}'})
 
+# Hapus user dari database sekaligus suruh alat hapus memori sidik jarinya
 @app.route('/api/web/delete', methods=['POST'])
 def web_delete():
-    """ Hapus user dari database dan instruksikan alat untuk hapus data di sensor fisiknya """
     conn = get_db_connection()
     if not conn:
         return jsonify({'status': 'error', 'message': 'Database error'}), 500
     
     finger_id = request.json.get('fingerprint_id')
     if not finger_id:
-        return jsonify({'status': 'error', 'message': 'fingerprint_id diperlukan'}), 400
+        return jsonify({'status': 'error', 'message': 'ID jari yang mana yang mau dihapus?'}), 400
         
     cursor = conn.cursor()
     
-    # 1. Hapus record dari database
+    # Hapus datanya di db
     cursor.execute("DELETE FROM fingerprint_users WHERE fingerprint_id = %s", (finger_id,))
     
-    # 2. Set mode DELETE agar alat menghapus data di memori internal sensor
+    # Suruh alat buat hapus template sidik jari yang ada di memori fisiknya
     cursor.execute("UPDATE device_state SET mode = 'DELETE', target_enroll_id = %s WHERE id = 1", (finger_id,))
     
     conn.commit()
@@ -214,9 +208,9 @@ def web_delete():
     
     return jsonify({'status': 'delete_triggered', 'id': finger_id})
 
+# Ambil semua daftar user buat ditampilin di web
 @app.route('/api/users', methods=['GET'])
 def get_users():
-    """ Menampilkan semua daftar user yang terdaftar di sistem """
     conn = get_db_connection()
     if not conn:
         return jsonify({'status': 'error', 'message': 'Database error'}), 500
@@ -229,5 +223,5 @@ def get_users():
     return jsonify(users)
 
 if __name__ == '__main__':
-    # Jalankan server lokal di port 5000
+    # Jalanin di port 5000
     app.run(debug=True, host='0.0.0.0', port=5000)
